@@ -48,7 +48,7 @@ if sys.platform == "win32":
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 _VERSION_MAJOR = "01"
-_VERSION_BUILD = "0037"   # auto-incremented by pre-commit hook
+_VERSION_BUILD = "0038"   # auto-incremented by pre-commit hook
 APP_TITLE   = (f"BMW KIS Search  ·  v{_VERSION_MAJOR}.{_VERSION_BUILD}"
                f"  ·  by NBTboost creators © Atlanteg")
 WIN_W, WIN_H = 1150, 720
@@ -1421,6 +1421,13 @@ def main():
     root.geometry(f"{WIN_W}x{WIN_H}")
     root.minsize(820, 540)
     root.configure(bg=C_BG)
+
+    _ico = _THIS_DIR / "kis.ico"
+    if _ico.exists():
+        try:
+            root.iconbitmap(str(_ico))
+        except Exception:
+            pass
 
     splash = tk.Frame(root, bg=C_BG)
     splash.place(relx=0, rely=0, relwidth=1, relheight=1)
