@@ -48,7 +48,7 @@ if sys.platform == "win32":
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 _VERSION_MAJOR = "01"
-_VERSION_BUILD = "0041"   # auto-incremented by pre-commit hook
+_VERSION_BUILD = "0042"   # auto-incremented by pre-commit hook
 APP_TITLE   = (f"BMW KIS Search  ·  v{_VERSION_MAJOR}.{_VERSION_BUILD}"
                f"  ·  by NBTboost creators © Atlanteg")
 WIN_W, WIN_H = 1150, 720
@@ -507,51 +507,88 @@ def _fetch_latest_build() -> "tuple[int | None, str]":
         return None, str(e)
 
 
-def _apply_update(root: "tk.Tk"):
-    """Download kis_search_gui.py from GitHub, replace current file, restart."""
+def _apply_update(root: "tk.Tk", latest_build: int):
+    """Download update (exe or .py), replace current file, restart.
+
+    EXE mode  (sys.frozen=True): downloads the versioned .exe from GitHub
+    Releases, then spawns a batch script that swaps the files after exit.
+
+    Script mode: downloads kis_search_gui.py via the GitHub Contents API
+    (bypasses CDN cache), replaces the current .py file, restarts.
+    """
     import urllib.request as _ur, shutil as _sh
     from tkinter import messagebox
-    path = Path(__file__).resolve()
-    tmp  = path.with_suffix(".py.new")
-    try:
-        # Use GitHub Contents API to bypass Fastly CDN cache
-        api_req = _ur.Request(
-            f"https://api.github.com/repos/{_GITHUB_REPO}/contents/kis_search_gui.py",
-            headers={
-                "User-Agent": f"bmw-kis-search/v01.{_VERSION_BUILD}",
-                "Accept":     "application/vnd.github.raw",
-            },
-        )
-        with _ur.urlopen(api_req, timeout=30) as resp:
-            tmp.write_bytes(resp.read())
-        # Verify downloaded file actually contains a newer build
+
+    new_b = f"{latest_build:04d}"
+
+    if getattr(sys, "frozen", False):
+        # ── Running as PyInstaller EXE ────────────────────────────────────
+        exe_name = f"KIS_Search_v01.{new_b}.exe"
+        url      = (f"https://github.com/{_GITHUB_REPO}/releases/download/"
+                    f"v01.{new_b}/{exe_name}")
+        cur_exe  = Path(sys.executable).resolve()
+        tmp_exe  = cur_exe.parent / "KIS_Search_update.exe"
         try:
-            text = tmp.read_text(encoding="utf-8", errors="replace")
-            m = re.search(r'_VERSION_BUILD\s*=\s*"(\d+)"', text)
-            if m and int(m.group(1)) <= int(_VERSION_BUILD):
-                tmp.unlink(missing_ok=True)
-                messagebox.showwarning(
-                    "Обновление",
-                    f"Скачанный файл (v01.{m.group(1)}) не новее текущей "
-                    f"(v01.{_VERSION_BUILD}).\nПопробуйте позже.",
-                    parent=root)
-                return
-        except Exception:
-            pass  # verification failed — proceed with the update anyway
-        bak = path.with_suffix(".py.bak")
-        bak.unlink(missing_ok=True)
-        _sh.copy2(path, bak)
-        _sh.move(str(tmp), str(path))
-    except Exception as e:
-        tmp.unlink(missing_ok=True)
-        messagebox.showerror("Ошибка обновления", str(e), parent=root)
-        return
-    import subprocess
-    # Use the resolved absolute path so the restarted process loads the
-    # updated file, not whatever sys.argv[0] happened to be (could be a
-    # relative path or a different copy of the script).
-    subprocess.Popen([sys.executable, str(path)] + sys.argv[1:])
-    os._exit(0)
+            _ur.urlretrieve(url, tmp_exe)
+        except Exception as e:
+            tmp_exe.unlink(missing_ok=True)
+            messagebox.showerror("Ошибка обновления", str(e), parent=root)
+            return
+        # Windows won't let us overwrite a running exe — use a batch trampoline
+        bat = cur_exe.parent / "_kis_update.bat"
+        bat.write_text(
+            "@echo off\r\n"
+            "timeout /t 2 /nobreak >nul\r\n"
+            f'move /y "{tmp_exe}" "{cur_exe}"\r\n'
+            f'start "" "{cur_exe}"\r\n'
+            'del "%~f0"\r\n',
+            encoding="ascii",
+        )
+        import subprocess
+        subprocess.Popen(
+            ["cmd", "/c", str(bat)],
+            creationflags=0x08000000,   # CREATE_NO_WINDOW
+            close_fds=True,
+        )
+        os._exit(0)
+    else:
+        # ── Running as .py script ─────────────────────────────────────────
+        path = Path(__file__).resolve()
+        tmp  = path.with_suffix(".py.new")
+        try:
+            api_req = _ur.Request(
+                f"https://api.github.com/repos/{_GITHUB_REPO}/contents/kis_search_gui.py",
+                headers={
+                    "User-Agent": f"kis-search/v01.{_VERSION_BUILD}",
+                    "Accept":     "application/vnd.github.raw",
+                },
+            )
+            with _ur.urlopen(api_req, timeout=30) as resp:
+                tmp.write_bytes(resp.read())
+            try:
+                text = tmp.read_text(encoding="utf-8", errors="replace")
+                m = re.search(r'_VERSION_BUILD\s*=\s*"(\d+)"', text)
+                if m and int(m.group(1)) <= int(_VERSION_BUILD):
+                    tmp.unlink(missing_ok=True)
+                    messagebox.showwarning(
+                        "Обновление",
+                        f"Скачанный файл (v01.{m.group(1)}) не новее текущей "
+                        f"(v01.{_VERSION_BUILD}).\nПопробуйте позже.",
+                        parent=root)
+                    return
+            except Exception:
+                pass
+            bak = path.with_suffix(".py.bak")
+            bak.unlink(missing_ok=True)
+            _sh.copy2(path, bak)
+            _sh.move(str(tmp), str(path))
+        except Exception as e:
+            tmp.unlink(missing_ok=True)
+            messagebox.showerror("Ошибка обновления", str(e), parent=root)
+            return
+        import subprocess
+        subprocess.Popen([sys.executable, str(path)] + sys.argv[1:])
+        os._exit(0)
 
 
 def _wipe_cache(db_path: Path):
@@ -1522,7 +1559,7 @@ class KisSearchApp:
             return
         self._lbl_update.config(text="Загрузка…")
         self.root.update_idletasks()
-        _apply_update(self.root)
+        _apply_update(self.root, self._latest_build)
 
     # ── Watchdog ──────────────────────────────────────────────────────────────
 
