@@ -1,0 +1,65 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2019      # Win Server 2019 — produces Win7/10/11-compatible exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.8"   # last version supporting Windows 7
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller==5.13.2
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $txt  = Get-Content VERSION -Raw
+          $maj  = [regex]::Match($txt, 'MAJOR=(\S+)').Groups[1].Value
+          $bld  = [regex]::Match($txt, 'BUILD=(\S+)').Groups[1].Value
+          echo "tag=v$maj.$bld"   >> $env:GITHUB_OUTPUT
+          echo "label=$maj.$bld"  >> $env:GITHUB_OUTPUT
+
+      - name: Build EXE
+        run: >
+          pyinstaller
+          --onefile
+          --windowed
+          --name "KIS_Search"
+          --icon kis.ico
+          kis_search_gui.py
+
+      - name: Rename with version
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.label }}"
+          Copy-Item dist\KIS_Search.exe "dist\KIS_Search_v$ver.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KIS_Search_v${{ steps.ver.outputs.label }}
+          path: dist/KIS_Search_v${{ steps.ver.outputs.label }}.exe
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: "KIS Search ${{ steps.ver.outputs.tag }}"
+          body: |
+            Standalone Windows executable — Python not required.
+            Works on Windows 7 SP1 / 10 / 11 (64-bit).
+
+            **Download:** `KIS_Search_v${{ steps.ver.outputs.label }}.exe`
+          files: dist/KIS_Search_v${{ steps.ver.outputs.label }}.exe
+          make_latest: true
