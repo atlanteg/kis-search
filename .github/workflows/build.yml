@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write   # needed to create GitHub Releases and upload assets
+
 jobs:
   build:
     runs-on: windows-2019      # Win Server 2019 — produces Win7/10/11-compatible exe
