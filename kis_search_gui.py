@@ -48,7 +48,7 @@ if sys.platform == "win32":
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 _VERSION_MAJOR = "01"
-_VERSION_BUILD = "0044"   # auto-incremented by pre-commit hook
+_VERSION_BUILD = "0045"   # auto-incremented by pre-commit hook
 APP_TITLE   = (f"BMW KIS Search  ·  v{_VERSION_MAJOR}.{_VERSION_BUILD}"
                f"  ·  by NBTboost creators © Atlanteg")
 WIN_W, WIN_H = 1150, 720
@@ -591,6 +591,40 @@ def _apply_update(root: "tk.Tk", latest_build: int):
         os._exit(0)
 
 
+# ── Compatibility filter ─────────────────────────────────────────────────────
+
+_COMPAT_KEYS   = ("platform", "engine", "market", "drive", "gearbox", "emission")
+_COMPAT_LABELS = ("Платформа", "Двигатель", "Рынок", "Привод", "КПП", "Норма")
+_COMPAT_W      = (6, 11, 5, 5, 4, 4)   # combobox widths
+_COMPAT_PATS   = {
+    "platform": re.compile(r"\b([EFG]\d{2,3})\b"),
+    "engine":   re.compile(r"\b([BNMD]\d{2}[A-Z]\d{2}[A-Z0-9]{2,})\b"),
+    "market":   re.compile(r"\b(ECE|US|CHN|ROW|KOR|JPN|AUS|MEX)\b"),
+    "drive":    re.compile(r"\b(AWD|RWD|FWD)\b"),
+    "gearbox":  re.compile(r"\b(AT|MT)\b"),
+    "emission": re.compile(r"\b(EU[0-9])\b"),
+}
+_COMPAT_ALL = "Все"
+
+def _collect_compat_opts(entries):
+    """Scan entry descriptions; return {key: ['Все', val1, val2, ...]}."""
+    seen = {k: set() for k in _COMPAT_KEYS}
+    for e in entries:
+        d = e.get("desc", "")
+        for k in _COMPAT_KEYS:
+            seen[k].update(_COMPAT_PATS[k].findall(d))
+    return {k: [_COMPAT_ALL] + sorted(v) for k, v in seen.items()}
+
+def _compat_match(desc, active):
+    """Return True if desc satisfies every active compat filter."""
+    d = desc or ""
+    for k, val in active.items():
+        if val and val != _COMPAT_ALL:
+            if val not in _COMPAT_PATS[k].findall(d):
+                return False
+    return True
+
+
 def _wipe_cache(db_path: Path):
     """Delete all cache files for this database (forces fresh scan)."""
     import shutil as _shutil
@@ -696,6 +730,8 @@ class KisSearchApp:
         self._latest_build = 0
 
         self._setup_style()
+        self._cf_vars = {k: tk.StringVar(value=_COMPAT_ALL) for k in _COMPAT_KEYS}
+        self._cf_cbs  = {}   # filled by _build_ui
         self._build_ui()
         self._start_watchdog()
         self._start_update_check()
@@ -850,6 +886,24 @@ class KisSearchApp:
 
         ttk.Button(sf, text="✕ Очистить", style="Sm.TButton",
                    command=self._clear).grid(row=1, column=4, pady=(5, 0))
+
+        # ── Compatibility filter row ───────────────────────────────────────
+        cf = ttk.Frame(sf)
+        cf.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(7, 2))
+        for col, (k, lbl, w) in enumerate(zip(_COMPAT_KEYS, _COMPAT_LABELS, _COMPAT_W)):
+            ttk.Label(cf, text=lbl + ":",
+                      foreground=C_DIM, background=C_BG,
+                      font=FONT_UI).grid(row=0, column=col * 2,
+                                         padx=(0 if col == 0 else 10, 4), sticky="e")
+            cb = ttk.Combobox(cf, textvariable=self._cf_vars[k],
+                              values=[_COMPAT_ALL], state="readonly",
+                              width=w, font=FONT_UI)
+            cb.grid(row=0, column=col * 2 + 1, sticky="w")
+            cb.bind("<<ComboboxSelected>>", lambda e: self._do_search())
+            self._cf_cbs[k] = cb
+        ttk.Button(cf, text="✕", style="Sm.TButton",
+                   command=self._clear_compat).grid(
+                       row=0, column=len(_COMPAT_KEYS) * 2, padx=(12, 0))
 
         # ── Results area + loading overlay ───────────────────────────────────
         self.rf = ttk.Frame(self.root)
@@ -1167,6 +1221,7 @@ class KisSearchApp:
                     self._start_next_queued()
                     if pname == active:
                         self.entries = entries
+                        self._update_compat_opts()
                         src = "кэш" if from_cache else f"сканирование {elapsed:.0f}с"
                         self.lbl_plat_info.config(
                             text=f"{pname}  ·  {len(entries):,} записей  ({src})")
@@ -1208,6 +1263,7 @@ class KisSearchApp:
 
         if entries is not None:
             self.entries = entries
+            self._update_compat_opts()
             self.lbl_plat_info.config(
                 text=f"{name}  ·  {len(entries):,} записей")
             self._do_search()
@@ -1236,6 +1292,7 @@ class KisSearchApp:
         entries = self._db.get(name)
         if entries is not None:
             self.entries = entries
+            self._update_compat_opts()
             self._do_search()
             self._hide_overlay()
             self.lbl_plat_info.config(
@@ -1256,6 +1313,7 @@ class KisSearchApp:
                     self._loading.discard(pname)
                     if pname == name:
                         self.entries = loaded
+                        self._update_compat_opts()
                         self._do_search()
                         self._hide_overlay()
                         src = "кэш" if from_cache else f"скан {elapsed:.0f}с"
@@ -1320,6 +1378,11 @@ class KisSearchApp:
         tf_arg    = None if tf == "All" else tf
 
         results = search(self.entries, groups, exclude=exc, type_filter=tf_arg)
+
+        # Apply compat filters
+        _cf_active = {k: self._cf_vars[k].get() for k in _COMPAT_KEYS}
+        if any(v != _COMPAT_ALL for v in _cf_active.values()):
+            results = [e for e in results if _compat_match(e.get("desc", ""), _cf_active)]
 
         rev = self._sort_rev if self._sort_col == sort_by else False
         self._sort_col = sort_by
@@ -1456,7 +1519,23 @@ class KisSearchApp:
         self.var_include.set("")
         self.var_exclude.set("")
         self.var_type.set("All")
+        for v in self._cf_vars.values():
+            v.set(_COMPAT_ALL)
         self._do_search()
+
+    def _clear_compat(self):
+        for v in self._cf_vars.values():
+            v.set(_COMPAT_ALL)
+        self._do_search()
+
+    def _update_compat_opts(self):
+        """Repopulate compat dropdowns from current entries."""
+        opts = _collect_compat_opts(self.entries)
+        for k, cb in self._cf_cbs.items():
+            cur = self._cf_vars[k].get()
+            cb.configure(values=opts[k])
+            if cur not in opts[k]:
+                self._cf_vars[k].set(_COMPAT_ALL)
 
     # ── Sorting ───────────────────────────────────────────────────────────────
 
